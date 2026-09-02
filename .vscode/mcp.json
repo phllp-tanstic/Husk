@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "midnight-kapa": {
+      "type": "http",
+      "url": "https://midnight.mcp.kapa.ai"
+    }
+  }
+}

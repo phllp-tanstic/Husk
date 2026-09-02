@@ -10,9 +10,8 @@ build/
 .env.local
 .env.*.local
 
-# Midnight / Compact compiled artifacts (placeholder pattern — confirm exact paths once toolchain is installed)
-*.zkir
-compiler-cache/
+# Midnight / Compact compiled artifacts (confirmed via Hello World tutorial compile output)
+contracts/managed/
 
 # Logs
 *.log
@@ -24,4 +23,4 @@ Thumbs.db
 
 # Editor
 .vscode/*
-!.vscode/extensions.json
+!.vscode/mcp.json
