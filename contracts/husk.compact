@@ -1,0 +1,29 @@
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+// Records a commitment per screened transaction that passed. Presence in 
+// this set is the public "husk" — proof a payment was checked and cleared 
+// — with no amount, no parties, no link to either party's wallet.
+export ledger screened: Set<Bytes<32>>;
+
+// --- Private state (witness-held, never on ledger) ---
+
+// Each agent's secret key. Provided by the TypeScript driver per-agent — 
+// never ownPublicKey(), which is prover-claimed and not signer-bound.
+witness localSecretKey(): Bytes<32>;
+
+// Derives an agent's public identity key from their secret key, with 
+// domain separation so this hash can't collide with commitments/other 
+// hashes elsewhere in the contract.
+export pure circuit deriveAgentKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "husk:agent:key:v1"), sk]);
+}
+
+// Off-chain helper: lets an agent compute its own public identity key.
+export circuit myAgentKey(): Bytes<32> {
+  return disclose(deriveAgentKey(localSecretKey()));
+}
+
+constructor() {
+}
