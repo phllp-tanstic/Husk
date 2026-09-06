@@ -2,27 +2,92 @@ pragma language_version 0.23;
 
 import CompactStandardLibrary;
 
-// Records a commitment per screened transaction that passed. Presence in 
-// this set is the public "husk" — proof a payment was checked and cleared 
-// — with no amount, no parties, no link to either party's wallet.
+// Public evidence that a payment was screened and cleared. Each entry is a
+// hiding commitment built in pay(); no amount, no party, and no linkable
+// identifier is recoverable from the entry itself.
 export ledger screened: Set<Bytes<32>>;
 
-// --- Private state (witness-held, never on ledger) ---
+// --- Private state (witness-held, supplied by the off-chain driver) ---
 
-// Each agent's secret key. Provided by the TypeScript driver per-agent — 
-// never ownPublicKey(), which is prover-claimed and not signer-bound.
-witness localSecretKey(): Bytes<32>;
+// Compliance screening oracle. This is a DELIBERATE placeholder for the real
+// off-chain call: the driver queries the sanctions/PEP provider (dilisense in
+// Wave 1) with the recipient's identity and the payment amount and returns
+// whether the payment may proceed. The signature is the one the real
+// implementation needs, so swapping the mock for the live API is a driver-side
+// change only — no contract change.
+//
+// The recipient is identified by their ZswapCoinPublicKey, the only recipient
+// identity a shielded payment exposes; mapping that key to the off-chain
+// identity actually screened is the driver's responsibility.
+witness screeningPassed(recipient: ZswapCoinPublicKey, amount: Uint<128>): Boolean;
 
-// Derives an agent's public identity key from their secret key, with 
-// domain separation so this hash can't collide with commitments/other 
-// hashes elsewhere in the contract.
-export pure circuit deriveAgentKey(sk: Bytes<32>): Bytes<32> {
-  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "husk:agent:key:v1"), sk]);
-}
+// Fresh per-payment randomness used as the hiding salt of the screened
+// commitment. MUST be uniformly random and never reused: it is what makes the
+// Set entry unlinkable across payments and its preimage unguessable.
+witness screeningNonce(): Bytes<32>;
 
-// Off-chain helper: lets an agent compute its own public identity key.
-export circuit myAgentKey(): Bytes<32> {
-  return disclose(deriveAgentKey(localSecretKey()));
+export circuit pay(
+  recipient: ZswapCoinPublicKey,
+  coin: QualifiedShieldedCoinInfo,
+  amount: Uint<128>
+): [] {
+  // 1. Screening gate. A failure here reverts the whole transaction: no coin
+  //    spend, no Set write, no "rejected" trace in public state — the only
+  //    visible effect is that the proof does not verify.
+  assert(screeningPassed(recipient, amount), "husk: recipient failed screening");
+
+  // The input coin must cover the payment; sendShielded derives change as
+  // input.value - value, so guard before sending to fail cleanly instead of
+  // relying on downstream value-balance rejection.
+  assert(amount <= coin.value, "husk: amount exceeds coin value");
+
+  // 2. Move the value: spend `coin`, pay `amount` to `recipient` (shielded
+  //    key, i.e. the left side of the recipient Either), remainder comes back
+  //    as change. disclose() is the compiler's permission gate for
+  //    private values entering coin primitives (same idiom as the official
+  //    coin test contracts) — verified NOT to leak these values on-chain;
+  //    see docs/architecture.md and the compiled zkir analysis referenced
+  //    there.
+  const result = sendShielded(
+    disclose(coin),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient)),
+    disclose(amount));
+
+  // 2a. Handle the ShieldedSendResult:
+  //     - `result.sent` is the coin created for the recipient; the screened
+  //       Set entry below is bound to it, tying the public evidence to the
+  //       actual Zswap output of this payment.
+  //     - `result.change` is Some(change coin) exactly when
+  //       coin.value != amount. The change is ALREADY persisted by
+  //       sendShielded itself — it creates the change output back to this
+  //       contract and claims both its spend and receive commitments — so the
+  //       circuit must NOT pass it to receiveShielded/createZswapOutput again
+  //       (that would double-count it). The off-chain driver reads
+  //       result.change to track the contract's change coin for future
+  //       payments. Here we only verify the runtime returned a consistent
+  //       result.
+  if (result.change.is_some) {
+    assert(result.change.value.value == coin.value - amount, "husk: inconsistent change coin");
+  } else {
+    assert(coin.value == amount, "husk: missing change coin");
+  }
+
+  // 3. Public proof of screening: a HIDING commitment over the payment
+  //    context. persistentCommit (not persistentHash — a bare hash of a
+  //    guessable preimage binds but does not hide) binds
+  //    [domain tag, recipient, amount, sent coin nonce] under the fresh
+  //    witness nonce as secret salt, so the entry:
+  //      - proves this exact payment shape was screened and cleared,
+  //      - is unique per payment (fresh nonce; a repeated identical payment
+  //        still produces a distinct entry),
+  //      - reveals neither amount nor recipient (they are committed under a
+  //        secret salt, not hashed in the clear).
+  //    Only the commitment itself is disclosed into the ledger — never the
+  //    nonce, the recipient, or the amount via this path.
+  const commitment = persistentCommit<Vector<4, Bytes<32>>>(
+    [pad(32, "husk:screened:payment:v1"), recipient.bytes, amount as Bytes<32>, result.sent.nonce],
+    screeningNonce());
+  screened.insert(disclose(commitment));
 }
 
 constructor() {
