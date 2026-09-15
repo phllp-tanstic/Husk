@@ -28,7 +28,7 @@ witness screeningNonce(): Bytes<32>;
 
 export circuit pay(
   recipient: ZswapCoinPublicKey,
-  coin: QualifiedShieldedCoinInfo,
+  coin: ShieldedCoinInfo,
   amount: Uint<128>
 ): [] {
   // 1. Screening gate. A failure here reverts the whole transaction: no coin
@@ -36,41 +36,32 @@ export circuit pay(
   //    visible effect is that the proof does not verify.
   assert(screeningPassed(recipient, amount), "husk: recipient failed screening");
 
-  // The input coin must cover the payment; sendShielded derives change as
-  // input.value - value, so guard before sending to fail cleanly instead of
-  // relying on downstream value-balance rejection.
-  assert(amount <= coin.value, "husk: amount exceeds coin value");
+  // EXACT-VALUE GATE (no partial payments, no change, ever). Replaces the
+  // old "amount <= coin.value" assert and the old change-handling if/else
+  // block entirely: change cannot occur by construction, so there is no
+  // change-coin custody to manage.
+  assert(amount == coin.value, "husk: partial payment not supported, amount must equal coin value");
 
-  // 2. Move the value: spend `coin`, pay `amount` to `recipient` (shielded
-  //    key, i.e. the left side of the recipient Either), remainder comes back
-  //    as change. disclose() is the compiler's permission gate for
-  //    private values entering coin primitives (same idiom as the official
-  //    coin test contracts) — verified NOT to leak these values on-chain;
-  //    see docs/architecture.md and the compiled zkir analysis referenced
-  //    there.
-  const result = sendShielded(
+  // 2. Move the value via the verified receiveShielded +
+  //    sendImmediateShielded pattern (see contracts/relay.compact, proven on
+  //    the real devnet): take momentary custody of the fresh,
+  //    contract-addressed output for this transaction, then forward its full
+  //    value to `recipient` (shielded key, i.e. the left side of the
+  //    recipient Either) in the same call. Nothing persists once the
+  //    transaction completes. disclose() is the compiler's permission gate
+  //    for private values entering coin primitives (same idiom as the
+  //    official coin test contracts).
+  receiveShielded(disclose(coin));
+  const result = sendImmediateShielded(
     disclose(coin),
     left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient)),
     disclose(amount));
 
-  // 2a. Handle the ShieldedSendResult:
-  //     - `result.sent` is the coin created for the recipient; the screened
-  //       Set entry below is bound to it, tying the public evidence to the
-  //       actual Zswap output of this payment.
-  //     - `result.change` is Some(change coin) exactly when
-  //       coin.value != amount. The change is ALREADY persisted by
-  //       sendShielded itself — it creates the change output back to this
-  //       contract and claims both its spend and receive commitments — so the
-  //       circuit must NOT pass it to receiveShielded/createZswapOutput again
-  //       (that would double-count it). The off-chain driver reads
-  //       result.change to track the contract's change coin for future
-  //       payments. Here we only verify the runtime returned a consistent
-  //       result.
-  if (result.change.is_some) {
-    assert(result.change.value.value == coin.value - amount, "husk: inconsistent change coin");
-  } else {
-    assert(coin.value == amount, "husk: missing change coin");
-  }
+  // 2a. Safety net (not expected to ever trigger given the exact-value gate
+  //     above): if this ever fires, the amount==coin.value assumption was
+  //     wrong somewhere, and that is a real bug to surface, not silently
+  //     ignore.
+  assert(result.change.is_some == false, "husk: unexpected change coin");
 
   // 3. Public proof of screening: a HIDING commitment over the payment
   //    context. persistentCommit (not persistentHash — a bare hash of a
