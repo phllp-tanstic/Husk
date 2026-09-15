@@ -23,18 +23,53 @@ unavoidable.
 
 Given that, custody adds cost (a hand-rolled balance ledger, replay-protection
 logic Husk would have to build and prove itself) without buying the guarantee
-it was meant to buy. So `pay()` operates directly on value the agent already
-holds in their own wallet, using Midnight's native shielded coin primitives
-(`CompactStandardLibrary`'s `sendShielded` / `mintShieldedToken` / related) —
-not a custom commitment map. This also means less custom security surface:
-double-spend/replay protection comes from Zswap's own nullifier system, not
-logic Husk has to get right unsupervised.
+it was meant to buy. So pay() operates directly on value the agent already
+holds in their own wallet — but not via a direct sendShielded spend of the
+agent's coin. sendShielded requires the contract to already own its input
+coin, which an agent's own wallet coin never is. pay() instead takes
+momentary custody within the same atomic call: receiveShielded accepts
+a freshly-constructed coin descriptor addressed to the contract (funded by
+the agent's wallet at the balancing layer, not chosen by mt_index), then
+sendImmediateShielded forwards that same coin onward to the recipient in
+the same transaction. Nothing persists after the call completes — no
+contract-held balance survives between payments.
+
+Constraint: pay() requires the payment amount to equal the input coin's
+value exactly — no partial payments, no change. This is deliberate, not a
+missing feature. sendImmediateShielded returns any change as a
+contract-owned coin, and the SDK currently exposes no way for off-chain code
+to enumerate a contract's owned coins to discover and re-spend that change
+later — building that recovery path would mean the contract holds
+unreachable value indefinitely on any partial payment. Requiring an exact
+match keeps the "nothing lingers" property genuinely true rather than true
+only in the common case. The practical implication: an agent paying a
+non-round amount needs a wallet-level coin split beforehand — this is
+deferred to the agent/wallet layer by design, not something pay() handles.
+
+One further consequence of this mechanism: the agent's wallet — not the
+agent's own choice of a specific held coin — determines which underlying
+UTXO funds a payment. Earlier designs assumed the caller names a specific
+QualifiedShieldedCoinInfo (an existing coin, by its ledger position); the
+actual mechanism takes a bare ShieldedCoinInfo (color + value only), and
+the wallet's balancer selects and spends whichever of the agent's coins
+cover it. This is a real behavioral difference client libraries and the
+demo agent's tool surface need to account for, not just an implementation
+detail.
+
+This also means less custom security surface: double-spend/replay
+protection comes from Zswap's own nullifier system, not logic Husk has to
+get right unsupervised.
 
 **Per-agent identity (private, witness-derived):**
-- Agent identity is derived from a witness-held secret key
-  (`deriveAgentKey(sk) = persistentHash(["husk:agent:key:v1", sk])`), never
-  from `ownPublicKey()`, which is prover-claimed and not cryptographically
-  bound to the actual signer.
+- pay() identifies the recipient directly by their ZswapCoinPublicKey —
+the real wallet key that receives the shielded output — not by a
+Husk-derived identity hash. An earlier draft of this document described a
+deriveAgentKey witness scheme; that scaffolding was removed from the
+contract when the custodial-ledger design was dropped (see Pivot #1 in
+the project handover) and this section was not updated to match at the
+time. Corrected here. Mapping a ZswapCoinPublicKey to an off-chain
+identity that was actually screened remains the driver's responsibility,
+same as before.
 
 **Per-transaction data (private):**
 - Amount and counterparty for a given `pay()` call are private circuit inputs.
