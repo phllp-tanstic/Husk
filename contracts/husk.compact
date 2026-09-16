@@ -9,17 +9,29 @@ export ledger screened: Set<Bytes<32>>;
 
 // --- Private state (witness-held, supplied by the off-chain driver) ---
 
-// Compliance screening oracle. This is a DELIBERATE placeholder for the real
-// off-chain call: the driver queries the sanctions/PEP provider (dilisense in
-// Wave 1) with the recipient's identity and the payment amount and returns
-// whether the payment may proceed. The signature is the one the real
-// implementation needs, so swapping the mock for the live API is a driver-side
-// change only — no contract change.
+// Compliance screening oracle backed by the real dilisense API
+// (https://developers.dilisense.com/, GET /v1/checkIndividual), implemented
+// off-chain by the driver (test/src/screening.ts in the test project). The
+// witness receives the recipient's ZswapCoinPublicKey, the PAYER-SUPPLIED
+// claimed name for that recipient, and the payment amount, and returns
+// whether the payment may proceed. Fail-closed: any provider error is a
+// screening failure, never a silent skip.
+//
+// `recipientName` is an Opaque<"string">: a client-held, arbitrary-length
+// string the CIRCUIT ITSELF CANNOT READ. It is verified by compilation with
+// the real toolchain (compact 0.5.2 / compiler 0.31.1 / language 0.23.0) to:
+//   - be accepted as a circuit parameter type,
+//   - keep the ledger-touching pay() circuit provable ("proof": true with
+//     full zkir + prover/verifier keys generated),
+//   - consume ZERO circuit inputs in the zkir — the name is forwarded by the
+//     generated runtime code into the witness call ONLY. It can never reach
+//     the ledger: any disclose/commit/use of it in circuit code is a compile
+//     error, and the compiled zkir below contains no trace of it.
 //
 // The recipient is identified by their ZswapCoinPublicKey, the only recipient
 // identity a shielded payment exposes; mapping that key to the off-chain
-// identity actually screened is the driver's responsibility.
-witness screeningPassed(recipient: ZswapCoinPublicKey, amount: Uint<128>): Boolean;
+// identity actually screened (the claimed name) is the driver's responsibility.
+witness screeningPassed(recipient: ZswapCoinPublicKey, recipientName: Opaque<"string">, amount: Uint<128>): Boolean;
 
 // Fresh per-payment randomness used as the hiding salt of the screened
 // commitment. MUST be uniformly random and never reused: it is what makes the
@@ -29,12 +41,18 @@ witness screeningNonce(): Bytes<32>;
 export circuit pay(
   recipient: ZswapCoinPublicKey,
   coin: ShieldedCoinInfo,
-  amount: Uint<128>
+  amount: Uint<128>,
+  // Payer-supplied claimed name of the recipient. Opaque<"string">: the
+  // circuit cannot read it — the generated runtime forwards it into the
+  // screeningPassed witness call and nowhere else. It is NEVER disclosed,
+  // NEVER committed, and NEVER written to the ledger in any form.
+  recipientName: Opaque<"string">
 ): [] {
   // 1. Screening gate. A failure here reverts the whole transaction: no coin
   //    spend, no Set write, no "rejected" trace in public state — the only
-  //    visible effect is that the proof does not verify.
-  assert(screeningPassed(recipient, amount), "husk: recipient failed screening");
+  //    visible effect is that the proof does not verify. The claimed name is
+  //    consumed here and nowhere else.
+  assert(screeningPassed(recipient, recipientName, amount), "husk: recipient failed screening");
 
   // EXACT-VALUE GATE (no partial payments, no change, ever). Replaces the
   // old "amount <= coin.value" assert and the old change-handling if/else
