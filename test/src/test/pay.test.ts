@@ -77,6 +77,14 @@ const EXACT_MSG = 'husk: partial payment not supported, amount must equal coin v
 const SCREEN_MSG = 'husk: recipient failed screening';
 const OLD_EXCEEDS_MSG = 'husk: amount exceeds coin value';
 
+// Placeholder claimed name for pay()'s 4th circuit argument
+// (recipientName: Opaque<"string">). This file deliberately keeps the
+// deterministic JS-controlled screeningPassed stub (NOT the real dilisense
+// API — see pay-screening.test.ts for that), so this value never changes the
+// verdict; it must merely be a syntactically valid Opaque<"string"> argument
+// for the call to encode correctly.
+const TEST_RECIPIENT_NAME = 'Husk Test Recipient';
+
 function makeWitnesses(opts: { screening: boolean }): Witnesses<unknown> {
   return {
     // TEST-ONLY stand-in for the real off-chain sanctions/PEP oracle. The
@@ -158,6 +166,7 @@ describe(`Husk pay()-fixed — local devnet (${network})`, () => {
 
   async function callPay(args: {
     screening: boolean;
+    recipientName: string;
     coin: ShieldedCoinInfo;
     amount: bigint;
   }): Promise<string> {
@@ -177,6 +186,11 @@ describe(`Husk pay()-fixed — local devnet (${network})`, () => {
           // the official runtime encoder (relay pattern — NO mt_index).
           encodeShieldedCoinInfo(args.coin),
           args.amount,
+          // 4th circuit arg: the payer-supplied claimed name for the
+          // recipient, Opaque<"string">. It is forwarded by the generated
+          // runtime into the screeningPassed witness call only; the
+          // deterministic stub above ignores its value.
+          args.recipientName,
         ],
         // Resolve the recipient's Zswap encryption public key so the coin
         // ciphertexts created for Bob are decryptable by Bob's wallet.
@@ -256,6 +270,7 @@ describe(`Husk pay()-fixed — local devnet (${network})`, () => {
 
     const txId = await callPay({
       screening: true,
+      recipientName: TEST_RECIPIENT_NAME,
       coin: deposit,
       amount,
     });
@@ -309,6 +324,7 @@ describe(`Husk pay()-fixed — local devnet (${network})`, () => {
 
     const err = await callPay({
       screening: false,
+      recipientName: TEST_RECIPIENT_NAME,
       coin: deposit,
       amount: deposit.value,
     })
@@ -336,6 +352,7 @@ describe(`Husk pay()-fixed — local devnet (${network})`, () => {
     // screeningPassed is TRUE here, so any failure cannot be the screening gate.
     const err = await callPay({
       screening: true,
+      recipientName: TEST_RECIPIENT_NAME,
       coin: deposit,
       amount: deposit.value + 1n,
     })
@@ -366,6 +383,7 @@ describe(`Husk pay()-fixed — local devnet (${network})`, () => {
     // screeningPassed is TRUE here, so any failure cannot be the screening gate.
     const err = await callPay({
       screening: true,
+      recipientName: TEST_RECIPIENT_NAME,
       coin: deposit,
       amount: partial,
     })

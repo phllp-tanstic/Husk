@@ -130,19 +130,33 @@ Circle's Compliance Engine is gated behind an enterprise request form — not vi
 
 - **Primary:** OpenSanctions — free, open-source, real OFAC/UN/EU/UK sanctions + PEP data. Self-hosted or queried via their API. Ruled out for Husk specifically: OpenSanctions classifies compliance screening as commercial use regardless of revenue, not eligible for the free/journalist key; only a 30-day trial is available via hosted API, which may not cover the full buildathon timeline.
 - **Alternative if a hosted API is preferred over self-hosting:** sanctions.io and ComplyAdvantage were both considered — neither currently offers a genuine ongoing self-serve free tier (sanctions.io is contract/calculator-based; ComplyAdvantage's cheapest self-serve plan is paid, with a discretionary startup-grant program as the only free path).
-- **Current candidate:** dilisense — self-serve, ongoing free quota (100 checks/month, not time-boxed), covers sanctions + PEP + criminal + adverse media, EU-hosted, GDPR-compliant, no query logging. Signup requires a work email; in progress.
+- **Current provider:** dilisense — integrated and live, signup complete. Self-serve, ongoing free quota (100 checks/month, not time-boxed), covers sanctions + PEP + criminal + adverse media, EU-hosted, GDPR-compliant, no query logging.
 
 The off-chain service wraps whichever provider is chosen behind one interface (`screen(address_or_name) -> pass/fail`), and the Compact contract calls that interface. Real data from Wave 1; the interface boundary just means the provider can be swapped without touching contract logic if needed later.
 
-## Screening oracle — real, from Wave 1
-
-Circle's Compliance Engine is gated behind an enterprise request form — not viable for a solo build. Instead:
-
-- **Primary:** OpenSanctions — free, open-source, real OFAC/UN/EU/UK sanctions + PEP data. Self-hosted or queried via their API. Ruled out for Husk specifically: OpenSanctions classifies compliance screening as commercial use regardless of revenue, not eligible for the free/journalist key; only a 30-day trial is available via hosted API, which may not cover the full buildathon timeline.
-- **Alternative if a hosted API is preferred over self-hosting:** sanctions.io and ComplyAdvantage were both considered — neither currently offers a genuine ongoing self-serve free tier (sanctions.io is contract/calculator-based; ComplyAdvantage's cheapest self-serve plan is paid, with a discretionary startup-grant program as the only free path).
-- **Current candidate:** dilisense — self-serve, ongoing free quota (100 checks/month, not time-boxed), covers sanctions + PEP + criminal + adverse media, EU-hosted, GDPR-compliant, no query logging. Signup requires a work email; in progress.
-
-The off-chain service wraps whichever provider is chosen behind one interface (`screen(address_or_name) -> pass/fail`), and the Compact contract calls that interface. Real data from Wave 1; the interface boundary just means the provider can be swapped without touching contract logic if needed later.
+Fuzzy matching is a name-similarity heuristic, not identity
+resolution. Husk queries dilisense with fuzzy_search=1 so that
+genuine spelling and transliteration variants of a listed name
+are caught — the "Igor Sechin" check returned the same real
+person across the UK, OFAC, EU, Swiss, Australian, Polish,
+Ukrainian and Japanese lists, including Cyrillic
+(Игорь Иванович СЕЧИН), Japanese (イーゴリ・セーチン) and
+romanization variants (Igor Ivanovitj SETJIN, Igor Ivanovič
+SEČIN, SIECZIN Igor Iwanowicz). That same setting also returns
+records for different people who merely share partial name
+similarity: the same query matched us_fbi_most_wanted's "IGOR
+ANATOLYEVICH SUSHCHIN" — an FSB officer wanted for the 2014
+Yahoo breach, born 1973 — an individual unrelated to Rosneft
+CEO Igor Ivanovich Sechin (born 1960), matching on a shared
+given name and a surname three edits away. This is not a Husk
+defect but an inherent property of fuzzy matching at any
+similarity threshold: name-based screening over- and
+under-matches, and dilisense's response carries no match score
+or matched-field, so Husk cannot programmatically distinguish a
+strong identity match from a weak token-level one. Husk's policy
+is therefore deliberately fail-closed — any SANCTION/CRIMINAL
+hit, strong or weak, blocks the payment — which prevents
+evasion but causes measurable false refusals.
 
 ## What is intentionally NOT built this wave
 
@@ -170,5 +184,5 @@ These wrap the real Midnight wallet calls — no separate mock layer for the age
 ## Open questions to resolve before writing Compact
 
 - [x] Exact Compact syntax for private-state declarations and witness functions — resolved via research against official docs/repos; see custody model above.
-- [x] How the real screening-provider call is expressed as a witness/oracle pattern in Compact — to be finalized once the screening provider (dilisense) signup completes.
+- [x] How the real screening-provider call is expressed as a witness/oracle pattern in Compact — finalized: dilisense is integrated and live (see screening.ts), the payer-supplied claimed name flows as Opaque<"string"> into the screeningPassed witness.
 - [x] Nullifier/commitment primitive Compact exposes natively vs. what needs custom circuit logic — resolved: use `persistentCommit`/`transientCommit` from `CompactStandardLibrary`, never hand-rolled `persistentHash`-based commitments for hiding purposes (hashes bind, they don't hide).
