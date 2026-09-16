@@ -9,6 +9,8 @@ build/
 .env
 .env.local
 .env.*.local
+.env.preview
+.env.preprod
 
 # Midnight / Compact compiled artifacts (confirmed via Hello World tutorial compile output)
 contracts/managed/

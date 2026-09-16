@@ -65,11 +65,12 @@ get right unsupervised.
 the real wallet key that receives the shielded output — not by a
 Husk-derived identity hash. An earlier draft of this document described a
 deriveAgentKey witness scheme; that scaffolding was removed from the
-contract when the custodial-ledger design was dropped (see Pivot #1 in
-the project handover) and this section was not updated to match at the
-time. Corrected here. Mapping a ZswapCoinPublicKey to an off-chain
-identity that was actually screened remains the driver's responsibility,
-same as before.
+contract when the custodial-ledger design was dropped — custody bought no
+real guarantee (see the Value model section above), so the identity
+scaffolding that design needed was removed with it — and this section was
+not updated to match at the time. Corrected here. Mapping a
+ZswapCoinPublicKey to an off-chain identity that was actually screened remains
+the driver's responsibility, same as before.
 
 **Per-transaction data (private):**
 - Amount and counterparty for a given `pay()` call are private circuit inputs.
@@ -88,15 +89,16 @@ same as before.
   (commitments/nullifiers per the protocol's own design — not Husk-specific
   bookkeeping).
 
-**Delivery to the recipient:** `sendShielded` does not currently generate
-discoverable ciphertexts for a recipient who isn't the transaction's own
-caller — so agent B's wallet can't rely on normal sync to discover a coin
-Husk sent them on A's behalf. Since both agents in Husk's Wave 1 demo are
-MCP-connected sessions (not anonymous wallet users), Husk's own off-chain
-service — already required to make the real screening call — also relays
-the sent coin's details (nonce, color, value, Merkle index) directly to
-agent B out-of-band. This is a Phase 3/4 integration concern, not something
-that affects the contract's on-chain guarantees.
+**Delivery to the recipient:** the payer's driver supplies the recipient's
+shielded address — both the coin public key (the `recipient` argument to
+`pay()`) and the matching encryption public key — when submitting the call
+(the test driver passes them via `additionalCoinEncPublicKeyMappings`). The
+output ciphertext is therefore addressed to the recipient's own encryption
+key, and the recipient's wallet discovers the coin through ordinary wallet
+sync, exactly like any other shielded output. The address itself is exchanged
+between the two parties out-of-band before paying, as with any shielded
+recipient, but there is no separate relay service: nothing beyond normal
+wallet sync is needed to receive a coin Husk sent on someone else's behalf.
 
 This is the dual-ledger split the rubric's Engineering criterion grades directly
 — keep this section accurate as the contract evolves, since it's the first
@@ -104,22 +106,32 @@ thing a technical judge checks against the code.
 
 ## Flow
 
-1. Agent A calls `pay(recipientKey, amount)`, referencing a shielded coin A
-   already holds.
-2. Contract queries the screening oracle (real data from Wave 1 — see below)
-   with the minimum needed to check — not the full transaction.
-3. **Pass:** the contract calls `sendShielded` to move the coin to B, using
-   A's own coin as input — this is a single circuit call proved by A alone,
-   which is all that's needed since the value transfer itself happens at the
-   Zswap protocol level, not via a second party's private state. A commitment
-   is added to `screened`, proving a screened payment cleared. Nothing else
-   public.
+1. The payer's driver calls
+   `pay(recipient, coin, amount, recipientName)` with a FRESH
+   `ShieldedCoinInfo` descriptor (color + value, invented nonce) — not an
+   existing coin named by ledger position. The payer's wallet balancer funds
+   the contract-addressed output that `receiveShielded` accepts (see the
+   Value model section above); `recipientName` is the payer-supplied claimed
+   name of the recipient, which the circuit itself cannot read.
+2. Screening happens off-chain in the driver before the call: the claimed
+   name is checked against the real provider (dilisense) and a verdict is
+   pre-computed. The circuit queries nothing itself — the `screeningPassed`
+   witness receives the recipient key, the claimed name and the amount, and
+   returns that pre-computed verdict (fail-closed on any missing or errored
+   verdict).
+3. **Pass:** the circuit takes momentary custody of the freshly-constructed
+   coin via `receiveShielded`, then forwards its full value to `recipient` in
+   the same atomic call via `sendImmediateShielded` — a single circuit call
+   proved by A alone, which is all that's needed since the value transfer
+   itself happens at the Zswap protocol level, not via a second party's
+   private state. A hiding commitment over the payment context is added to
+   `screened`, proving a screened payment cleared. Nothing else public.
 4. **Fail:** transaction reverts. Nothing is written publicly — a visible
    "rejected" event would itself leak that A attempted a flagged payment,
    which defeats the point.
-5. **Delivery:** Husk's off-chain service relays the sent coin's details to
-   agent B directly (see State section above), since normal wallet ciphertext
-   sync doesn't cover contract-mediated sends to a non-caller recipient today.
+5. **Delivery:** via ordinary wallet sync — see "Delivery to the
+   recipient" in the State section above for how the recipient's
+   address reaches the call.
 6. **(Wave 2+, not this wave):** owner-triggered disclosure proof — "N payments
    over period P, all screened, total under $X" — revealed to one chosen
    party, individual transactions still hidden.
@@ -181,8 +193,8 @@ These wrap the real Midnight wallet calls — no separate mock layer for the age
 - Dry-run the exact demo trigger multiple times beforehand to confirm it reliably converges on calling `pay()`.
 - Record a clean successful run as a backup video alongside the live attempt — standard practice, doesn't make the system less real, just protects against a live-demo hiccup in front of judges.
 
-## Open questions to resolve before writing Compact
+## Design questions — resolved
 
 - [x] Exact Compact syntax for private-state declarations and witness functions — resolved via research against official docs/repos; see custody model above.
-- [x] How the real screening-provider call is expressed as a witness/oracle pattern in Compact — finalized: dilisense is integrated and live (see screening.ts), the payer-supplied claimed name flows as Opaque<"string"> into the screeningPassed witness.
+- [x] How the real screening-provider call is expressed as a witness/oracle pattern in Compact — finalized: dilisense is integrated and live (see test/src/screening.ts), the payer-supplied claimed name flows as Opaque<"string"> into the screeningPassed witness.
 - [x] Nullifier/commitment primitive Compact exposes natively vs. what needs custom circuit logic — resolved: use `persistentCommit`/`transientCommit` from `CompactStandardLibrary`, never hand-rolled `persistentHash`-based commitments for hiding purposes (hashes bind, they don't hide).

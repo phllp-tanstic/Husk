@@ -2,10 +2,10 @@
 //
 // Tests contracts/husk.compact (compiled output in contracts/managed/husk): pay() requires amount == coin.value
 // exactly (no partial payments, no change) and moves value via the verified
-// receiveShielded + sendImmediateShielded pattern (see relay.compact).
-// The circuit takes a FRESH ShieldedCoinInfo descriptor (invented nonce,
-// value anchored to a real committed coin the sender holds); the wallet
-// balancer funds the contract-addressed output — the relay-probe pattern.
+// receiveShielded + sendImmediateShielded pattern (verified on a real local
+// devnet). The circuit takes a FRESH ShieldedCoinInfo descriptor (invented
+// nonce, value anchored to a real committed coin the sender holds); the
+// wallet balancer funds the contract-addressed output.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
